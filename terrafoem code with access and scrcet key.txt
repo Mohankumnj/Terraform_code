@@ -1,0 +1,384 @@
+provider "aws" {
+  access_key = "AKIAW3MEF2CITP3MHIVK"
+  secret_key = "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"
+  region     = "ap-south-1"
+}
+
+# IAM Role for EC2
+resource "aws_iam_role" "ec2_new_role" {
+  name = "ec2-new-role1"
+
+  assume_role_policy = jsonencode({
+    Version   = "2012-10-17",
+    Statement = [{
+      Effect    = "Allow",
+      Principal = {
+        Service = "ec2.amazonaws.com"
+      },
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+# Attach policies to EC2 role
+resource "aws_iam_role_policy_attachment" "s3_full_access" {
+  role       = aws_iam_role.ec2_new_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonS3FullAccess"
+}
+
+resource "aws_iam_role_policy_attachment" "ec2_full_access" {
+  role       = aws_iam_role.ec2_new_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2FullAccess"
+}
+
+resource "aws_iam_role_policy_attachment" "codepipeline_full_access" {
+  role       = aws_iam_role.ec2_new_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AWSCodePipeline_FullAccess"
+}
+
+resource "aws_iam_role_policy_attachment" "codedeploy_full_access" {
+  role       = aws_iam_role.ec2_new_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AWSCodeDeployFullAccess"
+}
+
+# Generate and download key pair
+resource "tls_private_key" "my_keypair" {
+  algorithm = "RSA"
+  rsa_bits  = 2048
+}
+
+resource "local_file" "private_key" {
+  content  = tls_private_key.my_keypair.private_key_pem
+  filename = "C:/Users/my-pem.pem"  # Update with your desired path
+}
+
+# VPC
+resource "aws_vpc" "example" {
+  cidr_block           = "10.0.0.0/16"
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+}
+
+# Internet Gateway
+resource "aws_internet_gateway" "example" {
+  vpc_id = aws_vpc.example.id
+}
+
+# Subnet
+resource "aws_subnet" "example" {
+  vpc_id                  = aws_vpc.example.id
+  cidr_block              = "10.0.2.0/24"
+  availability_zone       = "ap-south-1b"
+  map_public_ip_on_launch = true
+}
+
+# Route Table
+resource "aws_route_table" "example" {
+  vpc_id = aws_vpc.example.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.example.id
+  }
+}
+
+# Associate Subnet with Route Table
+resource "aws_route_table_association" "example" {
+  subnet_id      = aws_subnet.example.id
+  route_table_id = aws_route_table.example.id
+}
+
+# Custom Security Group for HTTP, HTTPS, and SSH
+resource "aws_security_group" "ingress-all-test" {
+  name = "allow-all-sg"
+  vpc_id = aws_vpc.example.id  # Corrected reference to the VPC resource
+
+  # SSH rule
+  ingress {
+    cidr_blocks = ["0.0.0.0/0"]
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+  }
+
+  # HTTP rule
+  ingress {
+    cidr_blocks = ["0.0.0.0/0"]
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+  }
+
+  # HTTPS rule
+  ingress {
+    cidr_blocks = ["0.0.0.0/0"]
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+  }
+
+  # Egress rule for all traffic
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+# IAM Instance Profile
+resource "aws_iam_instance_profile" "example" {
+  name = "example-instance-profile1"
+  role = aws_iam_role.ec2_new_role.name
+}
+
+# EC2 Instance
+resource "aws_instance" "example" {
+  ami             = "ami-03bb6d83c60fc5f7c"
+  instance_type   = "t2.micro"
+  subnet_id       = aws_subnet.example.id
+  security_groups = [aws_security_group.ingress-all-test.id]  # Use security group ID instead of name
+  
+  iam_instance_profile = aws_iam_instance_profile.example.name
+
+  user_data = <<-EOF
+   #!/bin/bash
+
+   # Update package list
+   sudo apt update
+
+   # Install Apache2
+   sudo apt install -y apache2
+
+   # Start Apache2 service
+   sudo systemctl start apache2
+
+   # Enable Apache2 service to start on boot
+   sudo systemctl enable apache2
+
+   # Set permissions for /var/www/html to chmod 777
+   sudo chmod -R 777 /var/www/html
+   
+  
+   # Install dependencies for CodeDeploy agent
+   sudo apt install -y ruby wget
+
+   # Download and install CodeDeploy agent
+   cd /tmp
+   wget https://aws-codedeploy-us-west-2.s3.us-west-2.amazonaws.com/latest/install
+   chmod +x ./install
+   sudo ./install auto
+   
+   # Remove all files from /var/www/html
+   sudo rm -rf /var/www/html/*
+
+
+   # Retrieve public IPv4 address and print it to a file
+   PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
+  EOF
+
+  tags = {
+    Name        = "example-instance"
+    Environment = "production"  # This tag can be used to target instances in your CodeDeploy deployment group
+  }
+}
+
+
+
+# AWS S3 Bucket
+resource "aws_s3_bucket" "example_bucket" {
+  bucket = "tftfqwertyu"  # Change to a unique bucket name
+  # Add other configurations as needed, such as access control, encryption, etc.
+}
+
+# AWS CodeDeploy application
+resource "aws_codedeploy_app" "example" {
+  name              = "example-application-1s"
+  compute_platform  = "Server"
+}
+
+# IAM Role for CodeDeploy
+resource "aws_iam_role" "codedeploy_service_role" {
+  name               = "example-codedeploy-service-role"
+  assume_role_policy = jsonencode({
+    Version   = "2012-10-17",
+    Statement = [{
+      Effect    = "Allow",
+      Principal = {
+        Service = "codedeploy.amazonaws.com"
+      },
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+# IAM Policy for CodeDeploy
+resource "aws_iam_policy" "codedeploy_policy" {
+  name        = "example-codedeploy-policy1"
+  description = "IAM policy for CodeDeploy"
+  policy = jsonencode({
+    Version   = "2012-10-17",
+    Statement = [{
+      Effect    = "Allow",
+      Action    = [
+        "codedeploy:*",
+        "s3:Get*",
+        "s3:List*"
+      ],
+      Resource  = "*"
+    }]
+  })
+}
+
+# Attach IAM Policy to CodeDeploy Role
+resource "aws_iam_role_policy_attachment" "codedeploy_policy_attachment" {
+  role       = aws_iam_role.codedeploy_service_role.name
+  policy_arn = aws_iam_policy.codedeploy_policy.arn
+}
+
+# Attach policies to CodeDeploy service role
+resource "aws_iam_role_policy_attachment" "s3_full_access_codedeploy" {
+  role       = aws_iam_role.codedeploy_service_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonS3FullAccess"
+}
+
+resource "aws_iam_role_policy_attachment" "codepipeline_full_access_codedeploy" {
+  role       = aws_iam_role.codedeploy_service_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AWSCodePipeline_FullAccess"
+}
+
+resource "aws_iam_role_policy_attachment" "codedeploy_full_access_codedeploy" {
+  role       = aws_iam_role.codedeploy_service_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AWSCodeDeployFullAccess"
+}
+
+# Attach EC2 full access policy to CodeDeploy service role
+resource "aws_iam_role_policy_attachment" "ec2_full_access_codedeploy" {
+  role       = aws_iam_role.codedeploy_service_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2FullAccess"
+}
+
+
+# AWS CodeDeploy Deployment Group
+resource "aws_codedeploy_deployment_group" "example_deployment_group" {
+  app_name                 = aws_codedeploy_app.example.name
+  deployment_group_name    = "example-deployment-group"
+  service_role_arn         = aws_iam_role.codedeploy_service_role.arn
+  deployment_config_name   = "CodeDeployDefault.OneAtATime"
+  auto_rollback_configuration {
+    enabled = false  # Disable auto rollback
+    # Optionally, you can specify events here if needed
+    # events  = ["DEPLOYMENT_FAILURE"]
+  }
+
+  ec2_tag_filter {
+    key    = "Name"
+    value  = "example-instance"
+    type   = "KEY_AND_VALUE"
+  }
+}
+
+
+# AWS CodePipeline
+resource "aws_codepipeline" "example" {
+  name     = "example-pipeline"
+  role_arn = aws_iam_role.example.arn
+
+  artifact_store {
+    location = aws_s3_bucket.example_bucket.bucket
+    type     = "S3"
+  }
+
+  stage {
+    name = "Source"
+
+    action {
+      name             = "SourceAction"
+      category         = "Source"
+      owner            = "ThirdParty"
+      provider         = "GitHub"
+      version          = "1"
+      output_artifacts = ["source_output"]
+
+      configuration = {
+        Owner             = "Mohankumnj"
+        Repo              = "CD-CI"
+        Branch            = "main"
+        OAuthToken        = "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"
+        PollForSourceChanges = "true"
+      }
+    }
+  }
+
+  stage {
+    name = "Deploy"
+
+    action {
+      name     = "DeployAction"
+      category = "Deploy"
+      owner    = "AWS"
+      provider = "CodeDeploy"
+      input_artifacts = ["source_output"]
+      version  = "1"
+
+      configuration = {
+        ApplicationName     = "example-application"
+        DeploymentGroupName = "example-deployment-group"
+      }
+    }
+  }
+}
+
+# IAM Role for CodePipeline
+resource "aws_iam_role" "example" {
+  name               = "example-codepipeline-role1"
+  assume_role_policy = jsonencode({
+    Version   = "2012-10-17",
+    Statement = [{
+      Effect    = "Allow",
+      Principal = {
+        Service = "codepipeline.amazonaws.com"
+      },
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+# IAM Policy for CodePipeline
+resource "aws_iam_policy" "example" {
+  name        = "example-codepipeline-policy1"
+  description = "IAM policy for CodePipeline"
+  policy = jsonencode({
+    Version   = "2012-10-17",
+    Statement = [
+      {
+        Effect    = "Allow",
+        Action    = [
+          "s3:GetObject",
+          "s3:GetObjectVersion",
+          "s3:GetBucketVersioning",
+          "s3:PutObject",
+          "s3:PutObjectAcl",
+          "s3:ListBucket",
+          "s3:DeleteObject"
+        ],
+        Resource  = [
+          "${aws_s3_bucket.example_bucket.arn}",
+          "${aws_s3_bucket.example_bucket.arn}/*"
+        ]
+      },
+      {
+        Effect    = "Allow",
+        Action    = "codedeploy:*",
+        Resource  = "*"
+      }
+    ]
+  })
+}
+
+# IAM Policy Attachment for CodePipeline
+resource "aws_iam_policy_attachment" "example" {
+  name       = "example-codepipeline-attachment"
+  roles      = [aws_iam_role.example.name]
+  policy_arn = aws_iam_policy.example.arn
+}
